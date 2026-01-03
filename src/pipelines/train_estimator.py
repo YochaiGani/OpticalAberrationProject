@@ -1,5 +1,6 @@
 import os
 import sys
+import argparse
 
 # --- Improved import guard for PyTorch / torchvision ---
 try:
@@ -169,6 +170,7 @@ except Exception as e:
 # הערה: VGG צורך הרבה זיכרון. אם יש שגיאת CUDA OOM, הקטן ל-4.
 BATCH_SIZE = 8           
 LEARNING_RATE = 1e-4
+WEIGHT_DECAY = 1e-4
 NUM_EPOCHS = 40
 
 # Loss Function Weights (Hybrid Loss)
@@ -231,73 +233,102 @@ class VGGLoss(nn.Module):
 # 3. DATASET
 # ==========================================
 class AberrationDataset(Dataset):
-    def __init__(self, labels_file, aberrated_dir, clean_dir):
+    def __init__(self, labels_file, aberrated_dir, clean_dir, training_mode=True): # <--- הוספת training_mode
         self.labels = np.load(labels_file)
         self.aberrated_dir = aberrated_dir
         self.clean_dir = clean_dir
+        self.training_mode = training_mode
         
         self.transform = transforms.Compose([transforms.ToTensor()])
-        
-        # Sorted files match labels index
         self.file_list = sorted(os.listdir(aberrated_dir))
         
         if len(self.file_list) != len(self.labels):
             print(f"[WARN] Files ({len(self.file_list)}) != Labels ({len(self.labels)})")
 
-    def __len__(self):
-        return len(self.labels)
-
     def __getitem__(self, idx):
-        # 1. Load Input (Aberrated)
         fname = self.file_list[idx]
         img_in = Image.open(os.path.join(self.aberrated_dir, fname)).convert('L')
         
-        # 2. Get Targets from Label Array
-        # Structure: [Z4..Z12 (6), Scale (1), SNR (1), Clean_ID (1)]
         full_label = self.labels[idx]
-        
         target_coeffs = torch.tensor(full_label[:6], dtype=torch.float32)
         target_scale = torch.tensor(full_label[6], dtype=torch.float32)
         
-        # 3. Load Ground Truth (Clean) using ID
         clean_id = int(full_label[8])
         clean_fname = f"{clean_id:05d}.png"
         img_clean = Image.open(os.path.join(self.clean_dir, clean_fname)).convert('L')
 
-        return self.transform(img_in), self.transform(img_clean), target_coeffs, target_scale
+        img_in = self.transform(img_in)
+        img_clean = self.transform(img_clean)
+
+        if self.training_mode:
+            noise_level = np.random.uniform(0.005, 0.03)
+            noise = torch.randn_like(img_in) * noise_level
+            img_in = torch.clamp(img_in + noise, 0, 1)
+
+        return img_in, img_clean, target_coeffs, target_scale
 
 # ==========================================
 # 4. TRAINER ENGINE
 # ==========================================
 class Trainer:
-    def __init__(self):
-        # 1. Initialize Components
-        self.model = AberrationNet().to(DEVICE)
+    def __init__(self, experiment_name, epochs, data_dir="data"):
+        self.exp_name = experiment_name
+        self.epochs = epochs		
+        self.model_dir = f"../models/{experiment_name}"
+        os.makedirs(self.model_dir, exist_ok=True)
+        self.checkpoint_path = os.path.join(self.model_dir, "checkpoint.pth")
+        self.best_model_path = os.path.join(self.model_dir, "best_model.pth")
+        self.plot_path = os.path.join(self.model_dir, "loss_history.png")
+        self.labels_path = os.path.join(data_dir, "labels.npy")
+        self.img_dir_aberrated = os.path.join(data_dir, "aberrated")
+        self.img_dir_clean = os.path.join(data_dir, "clean")		
+        self.model = AberrationNet(dropout_rate=0.5).to(DEVICE) # <--- Dropout
         self.simulator = DifferentiableOpticalSimulator(output_size=IMAGE_SIZE).to(DEVICE)
         self.vgg_loss = VGGLoss().to(DEVICE)
-        
-        # 2. Optimizer & Scheduler
-        self.optimizer = optim.Adam(self.model.parameters(), lr=LEARNING_RATE)
-        self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-            self.optimizer, mode='min', factor=0.5, patience=5
-        )
-        self.criterion_mse = nn.MSELoss()
-        
-        # 3. Data Loading
-        self._prepare_data()
+        self.optimizer = optim.Adam(self.model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)        
+        self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, mode='min', factor=0.5, patience=5)
+        self.criterion_mse = nn.MSELoss()        
+        self.start_epoch = 0
         self.history = {'train_loss': [], 'val_loss': []}
+        self.best_val_loss = float('inf')
+        self._prepare_data()
+        self._load_checkpoint() 
+    
+    def _load_checkpoint(self):
+        if os.path.exists(self.checkpoint_path):
+            print(f"[INFO] 🔄 Found checkpoint. Resuming from {self.checkpoint_path}...")
+            checkpoint = torch.load(self.checkpoint_path, map_location=DEVICE)
+            self.model.load_state_dict(checkpoint['model_state'])
+            self.optimizer.load_state_dict(checkpoint['optimizer_state'])
+            self.start_epoch = checkpoint['epoch'] + 1
+            self.history = checkpoint['history']
+            self.best_val_loss = checkpoint.get('best_val_loss', float('inf'))
+        else:
+            print(f"[INFO] ✨ Starting fresh training: '{self.exp_name}'")
 
+    def _save_checkpoint(self, epoch, val_loss):
+        state = {
+            'epoch': epoch,
+            'model_state': self.model.state_dict(),
+            'optimizer_state': self.optimizer.state_dict(),
+            'history': self.history,
+            'best_val_loss': self.best_val_loss
+        }
+        torch.save(state, self.checkpoint_path)
+        if val_loss < self.best_val_loss:
+            self.best_val_loss = val_loss
+            torch.save(self.model.state_dict(), self.best_model_path)
+            print(f">>> 🏆 New Best Model Saved! Loss: {val_loss:.5f}")
+			
     def _prepare_data(self):
         print("[INFO] Loading dataset...")
-        dataset = AberrationDataset(LABELS_PATH, IMG_DIR_ABERRATED, IMG_DIR_CLEAN)
+        full_dataset = AberrationDataset(self.labels_path, self.img_dir_aberrated, self.img_dir_clean, training_mode=True)
+        train_len = int(0.8 * len(full_dataset))
+        val_len = len(full_dataset) - train_len
+        train_ds, val_ds = torch.utils.data.random_split(full_dataset, [train_len, val_len])
         
-        # 80/20 Split
-        train_len = int(0.8 * len(dataset))
-        val_len = len(dataset) - train_len
-        train_ds, val_ds = torch.utils.data.random_split(dataset, [train_len, val_len])
-        
-        self.train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True, num_workers=0)
-        self.val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE, shuffle=False, num_workers=0)
+        self.train_loader = DataLoader(train_ds, batch_size=DEFAULT_BATCH_SIZE, shuffle=True, num_workers=4)
+        self.val_loader = DataLoader(val_ds, batch_size=DEFAULT_BATCH_SIZE, shuffle=False, num_workers=4)
         print(f"[INFO] Ready. Train: {train_len}, Val: {val_len}")
 
     def train_one_epoch(self):
@@ -364,28 +395,17 @@ class Trainer:
         return total_loss / len(self.val_loader)
 
     def run(self):
-        print(f"\n[INFO] Starting training with VGG Perceptual Loss...")
-        best_val_loss = float('inf')
-        
-        for epoch in range(NUM_EPOCHS):
-            print(f"\nEpoch {epoch+1}/{NUM_EPOCHS}")
-            
+        print(f"\n[INFO] Starting training from epoch {self.start_epoch} to {self.epochs}...")
+        for epoch in range(self.start_epoch, self.epochs):
+            print(f"\nEpoch {epoch+1}/{self.epochs}")
             train_loss = self.train_one_epoch()
             val_loss = self.validate()
-            
-            self.scheduler.step(val_loss)
-            
+            self.scheduler.step(val_loss)            
             self.history['train_loss'].append(train_loss)
             self.history['val_loss'].append(val_loss)
-            
-            print(f"Train Loss: {train_loss:.5f} | Val Loss: {val_loss:.5f}")
-            
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
-                torch.save(self.model.state_dict(), MODEL_SAVE_PATH)
-                print(f">>> Saved Best Model! Loss: {best_val_loss:.5f}")
-        
-        self._plot_results()
+            print(f"Train Loss: {train_loss:.5f} | Val Loss: {val_loss:.5f}")            
+            self._save_checkpoint(epoch, val_loss)
+            self._plot_results()
 
     def _plot_results(self):
         plt.figure(figsize=(10,5))
@@ -399,8 +419,15 @@ class Trainer:
         print("Plot saved.")
 
 if __name__ == "__main__":
-    with open("data/labels.npy", "r") as f:
-        print("\nsuccess\n")
-    os.makedirs("../models", exist_ok=True)
-    trainer = Trainer()
-    trainer.run()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--name", type=str, default="experiment_base", help="Experiment name (creates a folder in models/)")
+    parser.add_argument("--epochs", type=int, default=60, help="Number of epochs")
+    args = parser.parse_args()
+
+    print(f"🚀 Running Experiment: {args.name}")
+    
+    if not os.path.exists("data/labels.npy"):
+        print("[ERROR] data/labels.npy not found! Run generate_dataset.py first.")
+    else:
+        trainer = Trainer(experiment_name=args.name, epochs=args.epochs)
+        trainer.run()

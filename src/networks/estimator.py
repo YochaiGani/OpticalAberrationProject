@@ -6,7 +6,7 @@ from torchvision import models
 # THE NEURAL NETWORK (The Brain)
 # ==========================================
 class AberrationNet(nn.Module):
-    def __init__(self):
+    def __init__(self, dropout_rate=0.5):
         super().__init__()
         weights = models.ResNet18_Weights.DEFAULT
         self.backbone = models.resnet18(weights=weights)
@@ -15,7 +15,7 @@ class AberrationNet(nn.Module):
         with torch.no_grad():
             self.backbone.conv1.weight[:] = torch.mean(old_conv.weight, dim=1, keepdim=True)
         num_features = self.backbone.fc.in_features
-        self.backbone.fc = nn.Linear(num_features, 7)
+        self.backbone.fc = nn.Sequential(nn.Dropout(p=dropout_rate), nn.Linear(num_features, 7))
         
     def forward(self, x):
         raw_output = self.backbone(x) 
