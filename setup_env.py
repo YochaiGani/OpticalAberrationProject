@@ -23,23 +23,31 @@ def generate_requirements():
     """Scans the 'src' folder and generates requirements.txt automatically."""
     print("\n[1/2] Scanning project imports and updating requirements.txt...")
     ensure_tool_installed("pipreqs")
+    
     cmd = [
         "pipreqs", 
         "src", 
         "--force", 
         "--savepath", "requirements.txt",
-        "--ignore", ".venv,venv,__pycache__"
+        "--ignore", ".venv,venv,__pycache__,networks,core,pipelines" 
     ]
     
     try:
         subprocess.check_call(cmd)
-        print("✅ requirements.txt has been updated based on your current code!")
+        
+        # תיקון ידני של השם skimage -> scikit-image בקובץ שנוצר
+        with open("requirements.txt", "r") as f:
+            content = f.read()
+        
+        content = content.replace("skimage", "scikit-image")
+        
+        with open("requirements.txt", "w") as f:
+            f.write(content)
+            
+        print("✅ requirements.txt has been updated correctly!")
+        
     except subprocess.CalledProcessError as e:
         print(f"❌ Error generating requirements: {e}")
-    except FileNotFoundError:
-        # במקרה ש-pipreqs לא נמצא ב-PATH (קורה בווינדוס לפעמים), מנסים להריץ דרך פייתון
-        subprocess.check_call([sys.executable, "-m", "pipreqs.pipreqs", "src", "--force", "--savepath", "requirements.txt"])
-        print("✅ requirements.txt has been updated!")
 
 def install_requirements():
     """Installs everything listed in requirements.txt."""
