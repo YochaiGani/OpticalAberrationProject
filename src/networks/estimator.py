@@ -25,7 +25,6 @@ class AberrationNet(nn.Module):
         
     def forward(self, x):
         raw_output = self.backbone(x) 
-        # חיתוך דינמי
         coeffs = raw_output[:, :self.num_zernikes]
         s_raw  = raw_output[:, self.num_zernikes:]
         s_factor = torch.nn.functional.softplus(s_raw) + 0.5
