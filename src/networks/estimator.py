@@ -6,12 +6,8 @@ from core.config import ZERNIKE_NAMES, USE_PRETRAINED_WEIGHTS
 class AberrationNet(nn.Module):
     def __init__(self, dropout_rate=0.5):
         super().__init__()
-        
-        # 1. חישוב דינמי של גודל היציאה
         self.num_zernikes = len(ZERNIKE_NAMES)
         output_dim = self.num_zernikes + 1
-
-        # 2. החלטה האם להשתמש בידע קודם
         if USE_PRETRAINED_WEIGHTS:
             weights = models.ResNet18_Weights.DEFAULT
         else:
