@@ -1,6 +1,13 @@
 import os
 import sys
 import argparse
+from core.config import (
+    DEVICE, NUM_WORKERS, PIN_MEMORY,       
+    PROJECT_ROOT, MODELS_DIR, DATA_DIR,    
+    BATCH_SIZE, LEARNING_RATE, NUM_EPOCHS, WEIGHT_DECAY,
+    ALPHA, BETA, GAMMA,                    
+    IMAGE_SIZE                            
+)
 
 # --- Improved import guard for PyTorch / torchvision ---
 try:
@@ -157,6 +164,7 @@ def check_cuda_driver_compatibility():
 # ==========================================
 # 1. CONFIGURATION
 # ==========================================
+"""
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"[INFO] Running training on device: {DEVICE}")
 
@@ -180,12 +188,12 @@ GAMMA = 0.1    # Perceptual Loss: Semantic/Feature similarity
 
 # Paths
 DATA_DIR = "data"
-
 LABELS_PATH = os.path.join(DATA_DIR, "labels.npy")
 IMG_DIR_ABERRATED = os.path.join(DATA_DIR, "aberrated")
 IMG_DIR_CLEAN = os.path.join(DATA_DIR, "clean")
 MODEL_SAVE_PATH = "../models/best_model.pth"
 PLOT_SAVE_PATH = "../training_results.png"
+"""
 
 # ==========================================
 # 2. PERCEPTUAL LOSS (VGG19)
@@ -233,7 +241,7 @@ class VGGLoss(nn.Module):
 # 3. DATASET
 # ==========================================
 class AberrationDataset(Dataset):
-    def __init__(self, labels_file, aberrated_dir, clean_dir, training_mode=True): # <--- הוספת training_mode
+    def __init__(self, labels_file, aberrated_dir, clean_dir, training_mode=True): 
         self.labels = np.load(labels_file)
         self.aberrated_dir = aberrated_dir
         self.clean_dir = clean_dir
@@ -271,18 +279,19 @@ class AberrationDataset(Dataset):
 # 4. TRAINER ENGINE
 # ==========================================
 class Trainer:
-    def __init__(self, experiment_name, epochs, data_dir="data"):
+    def __init__(self, experiment_name, epochs=NUM_EPOCHS):
+        # במקום ../models או נתיבים שבורים:
         self.exp_name = experiment_name
-        self.epochs = epochs		
-        self.model_dir = f"../models/{experiment_name}"
+        self.epochs = epochs
+        self.model_dir = os.path.join(MODELS_DIR, experiment_name)	
         os.makedirs(self.model_dir, exist_ok=True)
         self.checkpoint_path = os.path.join(self.model_dir, "checkpoint.pth")
         self.best_model_path = os.path.join(self.model_dir, "best_model.pth")
         self.plot_path = os.path.join(self.model_dir, "loss_history.png")
-        self.labels_path = os.path.join(data_dir, "labels.npy")
-        self.img_dir_aberrated = os.path.join(data_dir, "aberrated")
-        self.img_dir_clean = os.path.join(data_dir, "clean")		
-        self.model = AberrationNet(dropout_rate=0.5).to(DEVICE) # <--- Dropout
+        self.labels_path = os.path.join(DATA_DIR, "labels.npy")
+        self.img_dir_aberrated = os.path.join(DATA_DIR, "aberrated")
+        self.img_dir_clean = os.path.join(DATA_DIR, "clean")		
+        self.model = AberrationNet(dropout_rate=0.5).to(DEVICE) 
         self.simulator = DifferentiableOpticalSimulator(output_size=IMAGE_SIZE).to(DEVICE)
         self.vgg_loss = VGGLoss().to(DEVICE)
         self.optimizer = optim.Adam(self.model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)        
@@ -326,9 +335,8 @@ class Trainer:
         train_len = int(0.8 * len(full_dataset))
         val_len = len(full_dataset) - train_len
         train_ds, val_ds = torch.utils.data.random_split(full_dataset, [train_len, val_len])
-        
-        self.train_loader = DataLoader(train_ds, batch_size=DEFAULT_BATCH_SIZE, shuffle=True, num_workers=4)
-        self.val_loader = DataLoader(val_ds, batch_size=DEFAULT_BATCH_SIZE, shuffle=False, num_workers=4)
+        self.train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True, num_workers=NUM_WORKERS, pin_memory=PIN_MEMORY)
+        self.val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE, shuffle=False, num_workers=NUM_WORKERS, pin_memory=PIN_MEMORY)
         print(f"[INFO] Ready. Train: {train_len}, Val: {val_len}")
 
     def train_one_epoch(self):
@@ -352,7 +360,6 @@ class Trainer:
             loss_param = loss_c + loss_s
             
             # --- 3. Physics Simulation (Reconstruction) ---
-            # Input: Clean image + Predicted params -> Output: Reconstructed Aberrated
             reconstructed = self.simulator(img_clean, pred_coeffs, pred_scale.squeeze())
             
             # --- 4. Pixel Loss (Beta) ---
@@ -415,7 +422,7 @@ class Trainer:
         plt.xlabel('Epochs')
         plt.ylabel('Loss')
         plt.legend()
-        plt.savefig(PLOT_SAVE_PATH)
+        plt.savefig(self.plot_path)
         print("Plot saved.")
 
 if __name__ == "__main__":

@@ -1,3 +1,6 @@
+import os
+import torch
+
 # ==========================================
 # 1. SYSTEM CONFIGURATION
 # ==========================================
@@ -51,3 +54,31 @@ TARGET_SNR = 60
 SAMPLES_PER_IMAGE = 5  
 TOTAL_CLEAN_IMAGES = 20000 
 CHECKPOINT_INTERVAL = 100
+
+# ==========================================
+# 4. TRAINING & RUNTIME CONFIGURATION (NEW)
+# ==========================================
+
+# --- Hardware Setup ---
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+NUM_WORKERS = 4 if torch.cuda.is_available() else 0
+PIN_MEMORY = True if torch.cuda.is_available() else False
+
+# --- Paths --- 
+_CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(_CURRENT_DIR))
+
+DATA_DIR = os.path.join(PROJECT_ROOT, 'data')
+MODELS_DIR = os.path.join(PROJECT_ROOT, 'models')
+os.makedirs(MODELS_DIR, exist_ok=True)
+
+# --- Training Hyperparameters ---
+BATCH_SIZE = 8
+LEARNING_RATE = 1e-4
+NUM_EPOCHS = 40
+WEIGHT_DECAY = 1e-4
+
+# --- Loss Weights ---
+ALPHA = 1.0  # Coeffs
+BETA = 0.5   # Pixel
+GAMMA = 0.1  # Perceptual
