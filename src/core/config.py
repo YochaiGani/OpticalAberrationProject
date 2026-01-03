@@ -77,6 +77,7 @@ BATCH_SIZE = 8
 LEARNING_RATE = 1e-4
 NUM_EPOCHS = 40
 WEIGHT_DECAY = 1e-4
+USE_PRETRAINED_WEIGHTS = True
 
 # --- Loss Weights ---
 ALPHA = 1.0  # Coeffs
